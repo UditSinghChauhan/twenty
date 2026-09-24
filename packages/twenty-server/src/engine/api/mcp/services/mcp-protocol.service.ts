@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 
-import { type ToolSet, zodSchema } from 'ai';
+import { jsonSchema, type ToolSet, zodSchema } from 'ai';
 import { type ActorMetadata, FieldActorSource } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
 
@@ -29,6 +29,7 @@ import { type McpMode } from 'src/engine/api/mcp/types/mcp-mode.type';
 import { type McpToolAnnotations } from 'src/engine/api/mcp/types/mcp-tool-annotations.type';
 import { buildMcpDirectCallToolSet } from 'src/engine/api/mcp/utils/build-mcp-direct-call-tool-set.util';
 import { getMcpDirectToolAnnotations } from 'src/engine/api/mcp/utils/get-mcp-direct-tool-annotations.util';
+import { normalizeMcpToolInputSchema } from 'src/engine/api/mcp/utils/normalize-mcp-tool-input-schema.util';
 import { wrapJsonRpcResponse } from 'src/engine/api/mcp/utils/wrap-jsonrpc-response.util';
 import { ApiKeyRoleService } from 'src/engine/core-modules/api-key/services/api-key-role.service';
 import { type FlatApiKey } from 'src/engine/core-modules/api-key/types/flat-api-key.type';
@@ -402,6 +403,9 @@ export class McpProtocolService {
 
       directTools[toolName] = {
         ...toolDefinition,
+        inputSchema: jsonSchema(
+          normalizeMcpToolInputSchema(toolDefinition.inputSchema),
+        ),
         annotations: getMcpDirectToolAnnotations(toolName),
       } as McpAnnotatedTool;
     }

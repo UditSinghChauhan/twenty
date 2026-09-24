@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Query,
   Res,
   UseFilters,
   UseGuards,
@@ -19,6 +20,7 @@ import { isDefined } from 'twenty-shared/utils';
 import { JsonRpc } from 'src/engine/api/mcp/dtos/json-rpc';
 import { McpAuthGuard } from 'src/engine/api/mcp/guards/mcp-auth.guard';
 import { McpProtocolService } from 'src/engine/api/mcp/services/mcp-protocol.service';
+import { parseMcpMode } from 'src/engine/api/mcp/utils/parse-mcp-mode.util';
 import { writeSseEvent } from 'src/engine/api/mcp/utils/write-sse-event.util';
 import { RestApiExceptionFilter } from 'src/engine/api/rest/rest-api-exception.filter';
 import { AuthRestApiExceptionFilter } from 'src/engine/core-modules/auth/filters/auth-rest-api-exception.filter';
@@ -66,6 +68,7 @@ export class McpCoreController {
     application: FlatApplication | undefined,
     @Headers('accept') acceptHeader: string | undefined,
     @Res({ passthrough: true }) res: Response,
+    @Query('mode') mode?: unknown,
   ) {
     const authContext = {
       workspace,
@@ -73,6 +76,7 @@ export class McpCoreController {
       userWorkspaceId,
       apiKey,
       application,
+      mode: parseMcpMode(mode),
     };
 
     // JSON-RPC notifications (no id) expect no response body regardless of Accept

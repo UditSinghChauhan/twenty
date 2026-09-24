@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 
 import { type ToolSet, zodSchema } from 'ai';
 import { type ActorMetadata, FieldActorSource } from 'twenty-shared/types';
@@ -25,7 +25,10 @@ import {
   LIST_SKILLS_TOOL_NAME,
   listSkillsInputSchema,
 } from 'src/engine/api/mcp/tools/list-skills.tool';
+import { type McpMode } from 'src/engine/api/mcp/types/mcp-mode.type';
 import { type McpToolAnnotations } from 'src/engine/api/mcp/types/mcp-tool-annotations.type';
+import { buildMcpDirectCallToolSet } from 'src/engine/api/mcp/utils/build-mcp-direct-call-tool-set.util';
+import { getMcpDirectToolAnnotations } from 'src/engine/api/mcp/utils/get-mcp-direct-tool-annotations.util';
 import { wrapJsonRpcResponse } from 'src/engine/api/mcp/utils/wrap-jsonrpc-response.util';
 import { ApiKeyRoleService } from 'src/engine/core-modules/api-key/services/api-key-role.service';
 import { type FlatApiKey } from 'src/engine/core-modules/api-key/types/flat-api-key.type';
@@ -54,6 +57,8 @@ import {
   LOAD_SKILL_TOOL_NAME,
   loadSkillInputSchema,
 } from 'src/engine/core-modules/tool-provider/tools/load-skill.tool';
+import { type ToolProviderContext } from 'src/engine/core-modules/tool-provider/interfaces/tool-provider-context.type';
+import { type ToolContext } from 'src/engine/core-modules/tool-provider/types/tool-context.type';
 import { type FlatWorkspace } from 'src/engine/core-modules/workspace/types/flat-workspace.type';
 import { type RolePermissionConfig } from 'src/engine/twenty-orm/types/role-permission-config.type';
 import { resolveRoleIdsForUser } from 'src/engine/twenty-orm/utils/resolve-role-ids-for-user.util';
@@ -89,8 +94,21 @@ const annotatePreloadedMcpTools = (toolSet: ToolSet): ToolSet =>
     }),
   );
 
+const isMcpToolAllowed = (toolName: string) =>
+  !MCP_EXCLUDED_TOOL_NAMES.has(toolName);
+
+type McpToolSetOptions = {
+  authContext?: WorkspaceAuthContext;
+  userId?: string;
+  userWorkspaceId?: string;
+  apiKey?: FlatApiKey;
+  application?: FlatApplication;
+};
+
 @Injectable()
 export class McpProtocolService {
+  private readonly logger = new Logger(McpProtocolService.name);
+
   constructor(
     private readonly toolRegistry: ToolRegistryService,
     private readonly userRoleService: UserRoleService,
@@ -108,10 +126,12 @@ export class McpProtocolService {
       workspaceId,
       roleId,
       rolePermissionConfig,
+      mode,
     }: {
       workspaceId: string;
       roleId: string;
       rolePermissionConfig: RolePermissionConfig;
+      mode?: McpMode;
     },
   ) {
     const instructions =
@@ -119,6 +139,7 @@ export class McpProtocolService {
         workspaceId,
         roleId,
         rolePermissionConfig,
+        mode,
       });
 
     return wrapJsonRpcResponse(requestId, {
@@ -225,25 +246,19 @@ export class McpProtocolService {
     return actorContext;
   }
 
-  private async buildMcpToolSet(
+  private async buildToolContext(
     workspace: FlatWorkspace,
     roleId: string,
     rolePermissionConfig: RolePermissionConfig,
-    options?: {
-      authContext?: WorkspaceAuthContext;
-      userId?: string;
-      userWorkspaceId?: string;
-      apiKey?: FlatApiKey;
-      application?: FlatApplication;
-    },
-  ): Promise<ToolSet> {
+    options?: McpToolSetOptions,
+  ): Promise<ToolProviderContext> {
     const actorContext = await this.buildActorContext(
       workspace.id,
       options?.userId,
       options?.apiKey,
     );
 
-    const toolContext = {
+    return {
       workspaceId: workspace.id,
       roleId,
       rolePermissionConfig,
@@ -253,6 +268,57 @@ export class McpProtocolService {
       userWorkspaceId: options?.userWorkspaceId,
       actorContext,
     };
+  }
+
+  private createLoadSkillsMcpTool(workspaceId: string): McpAnnotatedTool {
+    return {
+      ...createLoadSkillTool(
+        (names) => this.skillService.findFlatSkillsByNames(names, workspaceId),
+        async () => {
+          const allSkills =
+            await this.skillService.findAllFlatSkills(workspaceId);
+
+          return allSkills.map((skill) => skill.name);
+        },
+      ),
+      inputSchema: zodSchema(loadSkillInputSchema),
+      annotations: MCP_CLOSED_WORLD_READ_ONLY_TOOL_ANNOTATIONS,
+    } as McpAnnotatedTool;
+  }
+
+  private createListObjectMetadataNamesMcpTool(
+    workspaceId: string,
+  ): McpAnnotatedTool {
+    return {
+      ...createListObjectMetadataNamesTool(
+        this.flatEntityMapsCacheService,
+        workspaceId,
+      ),
+      inputSchema: zodSchema(listObjectMetadataNamesInputSchema),
+      annotations: MCP_CLOSED_WORLD_READ_ONLY_TOOL_ANNOTATIONS,
+    } as McpAnnotatedTool;
+  }
+
+  private createListSkillsMcpTool(workspaceId: string): McpAnnotatedTool {
+    return {
+      ...createListSkillsTool(this.skillService, workspaceId),
+      inputSchema: zodSchema(listSkillsInputSchema),
+      annotations: MCP_CLOSED_WORLD_READ_ONLY_TOOL_ANNOTATIONS,
+    } as McpAnnotatedTool;
+  }
+
+  private async buildMcpToolSet(
+    workspace: FlatWorkspace,
+    roleId: string,
+    rolePermissionConfig: RolePermissionConfig,
+    options?: McpToolSetOptions,
+  ): Promise<ToolSet> {
+    const toolContext = await this.buildToolContext(
+      workspace,
+      roleId,
+      rolePermissionConfig,
+      options,
+    );
 
     const preloadedTools = await this.toolRegistry.getToolsByName(
       COMMON_PRELOAD_TOOLS,
@@ -274,49 +340,131 @@ export class McpProtocolService {
       } as McpAnnotatedTool,
       [EXECUTE_TOOL_TOOL_NAME]: {
         ...createExecuteToolTool(this.toolRegistry, toolContext, {
-          isToolAllowed: (toolName) => !MCP_EXCLUDED_TOOL_NAMES.has(toolName),
+          isToolAllowed: isMcpToolAllowed,
           discoveryHint: MCP_TOOL_DISCOVERY_HINT,
         }),
         inputSchema: executeToolInputSchema,
         annotations: MCP_EXECUTE_TOOL_ANNOTATIONS,
       } as McpAnnotatedTool,
-      [LOAD_SKILL_TOOL_NAME]: {
-        ...createLoadSkillTool(
-          (names) =>
-            this.skillService.findFlatSkillsByNames(names, workspace.id),
-          async () => {
-            const allSkills = await this.skillService.findAllFlatSkills(
-              workspace.id,
-            );
-
-            return allSkills.map((skill) => skill.name);
-          },
-        ),
-        inputSchema: zodSchema(loadSkillInputSchema),
-        annotations: MCP_CLOSED_WORLD_READ_ONLY_TOOL_ANNOTATIONS,
-      } as McpAnnotatedTool,
-      [LIST_OBJECT_METADATA_NAMES_TOOL_NAME]: {
-        ...createListObjectMetadataNamesTool(
-          this.flatEntityMapsCacheService,
-          workspace.id,
-        ),
-        inputSchema: zodSchema(listObjectMetadataNamesInputSchema),
-        annotations: MCP_CLOSED_WORLD_READ_ONLY_TOOL_ANNOTATIONS,
-      } as McpAnnotatedTool,
-      [LIST_SKILLS_TOOL_NAME]: {
-        ...createListSkillsTool(this.skillService, workspace.id),
-        inputSchema: zodSchema(listSkillsInputSchema),
-        annotations: MCP_CLOSED_WORLD_READ_ONLY_TOOL_ANNOTATIONS,
-      } as McpAnnotatedTool,
+      [LOAD_SKILL_TOOL_NAME]: this.createLoadSkillsMcpTool(workspace.id),
+      [LIST_OBJECT_METADATA_NAMES_TOOL_NAME]:
+        this.createListObjectMetadataNamesMcpTool(workspace.id),
+      [LIST_SKILLS_TOOL_NAME]: this.createListSkillsMcpTool(workspace.id),
       [LEARN_TOOLS_TOOL_NAME]: {
         ...createLearnToolsTool(this.toolRegistry, toolContext, {
-          isToolAllowed: (toolName) => !MCP_EXCLUDED_TOOL_NAMES.has(toolName),
+          isToolAllowed: isMcpToolAllowed,
           discoveryHint: MCP_TOOL_DISCOVERY_HINT,
         }),
         inputSchema: zodSchema(learnToolsInputSchema),
         annotations: MCP_CLOSED_WORLD_READ_ONLY_TOOL_ANNOTATIONS,
       } as McpAnnotatedTool,
     };
+  }
+
+  private async buildDirectFixedMcpTools(
+    workspaceId: string,
+    toolContext: ToolContext,
+  ): Promise<ToolSet> {
+    const preloadedTools = await this.toolRegistry.getToolsByName(
+      COMMON_PRELOAD_TOOLS,
+      toolContext,
+    );
+
+    return {
+      ...annotatePreloadedMcpTools(preloadedTools),
+      [LOAD_SKILL_TOOL_NAME]: this.createLoadSkillsMcpTool(workspaceId),
+      [LIST_OBJECT_METADATA_NAMES_TOOL_NAME]:
+        this.createListObjectMetadataNamesMcpTool(workspaceId),
+      [LIST_SKILLS_TOOL_NAME]: this.createListSkillsMcpTool(workspaceId),
+    };
+  }
+
+  private async handleDirectToolsListing(
+    id: string | number,
+    workspace: FlatWorkspace,
+    toolContext: ToolProviderContext,
+  ) {
+    const startedAt = performance.now();
+
+    const [fixedTools, registryTools] = await Promise.all([
+      this.buildDirectFixedMcpTools(workspace.id, toolContext),
+      this.toolRegistry.getToolsByCategories(toolContext, {
+        excludeTools: [...MCP_EXCLUDED_TOOL_NAMES],
+      }),
+    ]);
+
+    const directTools: ToolSet = { ...fixedTools };
+
+    for (const [toolName, toolDefinition] of Object.entries(registryTools)) {
+      if (toolName in directTools) {
+        continue;
+      }
+
+      directTools[toolName] = {
+        ...toolDefinition,
+        annotations: getMcpDirectToolAnnotations(toolName),
+      } as McpAnnotatedTool;
+    }
+
+    const response = this.mcpToolExecutorService.handleToolsListing(
+      id,
+      directTools,
+    );
+
+    this.logger.debug(
+      `Direct tools/list for workspace ${workspace.id}: ${Object.keys(directTools).length} tools, ${Buffer.byteLength(JSON.stringify(response))} bytes, ${Math.round(performance.now() - startedAt)} ms`,
+    );
+
+    return response;
+  }
+
+  private async handleDirectToolRequest(
+    {
+      id,
+      method,
+      params,
+    }: Pick<JsonRpc, 'method' | 'params'> & {
+      id: string | number;
+    },
+    workspace: FlatWorkspace,
+    toolContext: ToolProviderContext,
+    sseWriter?: (data: Record<string, unknown>) => void,
+  ) {
+    if (method !== 'tools/call') {
+      return this.handleDirectToolsListing(id, workspace, toolContext);
+    }
+
+    if (!params) {
+      return wrapJsonRpcResponse(id, {
+        error: {
+          code: JSON_RPC_ERROR_CODE.INVALID_PARAMS,
+          message: 'tools/call requires params with name and arguments',
+        },
+      });
+    }
+
+    const fixedTools = await this.buildDirectFixedMcpTools(
+      workspace.id,
+      toolContext,
+    );
+
+    const toolSet =
+      typeof params.name === 'string'
+        ? buildMcpDirectCallToolSet({
+            toolName: params.name,
+            fixedTools,
+            isToolAllowed: isMcpToolAllowed,
+            executeByName: (toolName, args) =>
+              this.toolRegistry.resolveAndExecute(toolName, args, toolContext),
+          })
+        : fixedTools;
+
+    return this.mcpToolExecutorService.handleToolCall(
+      id,
+      toolSet,
+      params,
+      sseWriter,
+    );
   }
 
   // Returns null for JSON-RPC notifications (no id), which require no response body
@@ -328,12 +476,14 @@ export class McpProtocolService {
       userWorkspaceId,
       apiKey,
       application,
+      mode = 'meta',
     }: {
       workspace: FlatWorkspace;
       userId?: string;
       userWorkspaceId?: string;
       apiKey: FlatApiKey | undefined;
       application?: FlatApplication;
+      mode?: McpMode;
     },
     sseWriter?: (data: Record<string, unknown>) => void,
   ): Promise<Record<string, unknown> | null> {
@@ -355,6 +505,7 @@ export class McpProtocolService {
           workspaceId: workspace.id,
           roleId,
           rolePermissionConfig,
+          mode,
         });
       }
 
@@ -393,6 +544,21 @@ export class McpProtocolService {
       const authContext = isDefined(apiKey)
         ? buildApiKeyAuthContext({ workspace, apiKey })
         : undefined;
+
+      if (mode === 'direct') {
+        return await this.handleDirectToolRequest(
+          { id, method, params },
+          workspace,
+          await this.buildToolContext(workspace, roleId, rolePermissionConfig, {
+            authContext,
+            application,
+            userId,
+            userWorkspaceId,
+            apiKey,
+          }),
+          sseWriter,
+        );
+      }
 
       const toolSet = await this.buildMcpToolSet(
         workspace,

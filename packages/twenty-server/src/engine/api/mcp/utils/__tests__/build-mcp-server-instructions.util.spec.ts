@@ -153,4 +153,53 @@ describe('buildMcpServerInstructions', () => {
     );
     expect(instructions).not.toContain('list_logic_function_tools');
   });
+
+  describe('direct mode', () => {
+    const INPUT = {
+      objects: [COMPANY, PERSON],
+      actionToolNames: ['send_email'],
+      skillNames: 'workflow-building',
+    };
+
+    it('should default to the meta-tool instructions', () => {
+      expect(buildMcpServerInstructions(INPUT)).toBe(
+        buildMcpServerInstructions({ ...INPUT, mode: 'meta' }),
+      );
+    });
+
+    it('should drop every meta-tool reference', () => {
+      const instructions = buildMcpServerInstructions({
+        ...INPUT,
+        mode: 'direct',
+      });
+
+      expect(instructions).not.toMatch(
+        /execute_tool|learn_tools|get_tool_catalog/,
+      );
+      expect(instructions).not.toContain('Finding the right tool');
+      expect(instructions).toContain(
+        'Every tool you can use is listed directly with its input schema. Call it by name.',
+      );
+      expect(getLine(instructions, 'LOGIC_FUNCTION:')).toContain(
+        'listed with the other tools',
+      );
+    });
+
+    it('should keep skills, objects and routing guidance', () => {
+      const instructions = buildMcpServerInstructions({
+        ...INPUT,
+        mode: 'direct',
+      });
+
+      expect(instructions).toContain('load_skills(skillNames)');
+      expect(instructions).toContain('Available skills: workflow-building.');
+      expect(getLine(instructions, 'Available objects')).toContain(
+        'company/companies, person/people',
+      );
+      expect(instructions).toContain('Route by intent:');
+      expect(instructions).toContain(
+        'Destructive operations (delete_one, delete_many):',
+      );
+    });
+  });
 });

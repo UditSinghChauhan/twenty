@@ -124,9 +124,54 @@ describe('McpCoreController', () => {
           userWorkspaceId: mockUserWorkspaceId,
           apiKey: mockApiKey,
           application: undefined,
+          mode: 'meta',
         },
       );
       expect(result).toEqual(mockResponse);
+    });
+
+    it('should pass direct mode through only for mode=direct', async () => {
+      const mockRequest: JsonRpc = {
+        jsonrpc: '2.0',
+        method: 'tools/list',
+        id: '124',
+      };
+
+      mcpProtocolService.handleMCPCoreQuery.mockResolvedValue({});
+
+      await controller.handleMcpCore(
+        mockRequest,
+        mockWorkspace,
+        mockApiKey,
+        mockUser,
+        mockUserWorkspaceId,
+        undefined,
+        undefined,
+        mockRes,
+        'direct',
+      );
+
+      expect(mcpProtocolService.handleMCPCoreQuery).toHaveBeenLastCalledWith(
+        mockRequest,
+        expect.objectContaining({ mode: 'direct' }),
+      );
+
+      await controller.handleMcpCore(
+        mockRequest,
+        mockWorkspace,
+        mockApiKey,
+        mockUser,
+        mockUserWorkspaceId,
+        undefined,
+        undefined,
+        mockRes,
+        'Direct',
+      );
+
+      expect(mcpProtocolService.handleMCPCoreQuery).toHaveBeenLastCalledWith(
+        mockRequest,
+        expect.objectContaining({ mode: 'meta' }),
+      );
     });
 
     it('should handle initialize method', async () => {
@@ -172,6 +217,7 @@ describe('McpCoreController', () => {
           userWorkspaceId: mockUserWorkspaceId,
           apiKey: mockApiKey,
           application: undefined,
+          mode: 'meta',
         },
       );
       expect(result).toEqual(mockResponse);
@@ -219,6 +265,7 @@ describe('McpCoreController', () => {
           userWorkspaceId: mockUserWorkspaceId,
           apiKey: mockApiKey,
           application: undefined,
+          mode: 'meta',
         },
       );
       expect(result).toEqual(mockResponse);
@@ -284,6 +331,7 @@ describe('McpCoreController', () => {
           userId: undefined,
           userWorkspaceId: undefined,
           apiKey: mockApiKey,
+          mode: 'meta',
         },
       );
       expect(result).toEqual(mockResponse);
@@ -348,6 +396,7 @@ describe('McpCoreController', () => {
           userWorkspaceId: mockUserWorkspaceId,
           apiKey: mockApiKey,
           application: undefined,
+          mode: 'meta',
         },
         expect.any(Function),
       );

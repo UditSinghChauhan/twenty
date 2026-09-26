@@ -105,7 +105,7 @@ describe('buildMcpDirectCallToolSet', () => {
         success: false,
         message: 'Tool "find_many_persons" not found',
         error:
-          'Tool "find_many_persons" not found. Did you mean: find_many_people, find_many_pets? learn_tools confirms exact tool names and suggests close matches.',
+          'Tool "find_many_persons" not found. Did you mean: find_many_people, find_many_pets? Pass your best candidate name to learn_tools to confirm it before executing.',
       });
 
       expect(result).toEqual({
@@ -121,7 +121,7 @@ describe('buildMcpDirectCallToolSet', () => {
         success: false,
         message: 'Tool "find_many_persons" not found',
         error:
-          'Tool "find_many_persons" not found. learn_tools confirms exact tool names and suggests close matches.',
+          'Tool "find_many_persons" not found. Pass your best candidate name to learn_tools to confirm it before executing.',
       });
 
       expect(result).toMatchObject({

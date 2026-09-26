@@ -176,12 +176,13 @@ describe('buildMcpServerInstructions', () => {
       expect(instructions).not.toMatch(
         /execute_tool|learn_tools|get_tool_catalog/,
       );
-      expect(instructions).not.toContain('Finding the right tool');
+      expect(instructions).not.toContain('Not sure a constructed name exists?');
+      expect(instructions).not.toContain("Don't know which tool exists");
       expect(instructions).toContain(
         'Every tool you can use is listed directly with its input schema. Call it by name.',
       );
-      expect(getLine(instructions, 'LOGIC_FUNCTION:')).toContain(
-        'listed with the other tools',
+      expect(getLine(instructions, 'LOGIC_FUNCTION:')).toBe(
+        '  LOGIC_FUNCTION:   app_{function_name} — workspace-specific',
       );
     });
 
@@ -192,6 +193,8 @@ describe('buildMcpServerInstructions', () => {
       });
 
       expect(instructions).toContain('load_skills(skillNames)');
+      expect(instructions).toContain('list_object_metadata_names()');
+      expect(instructions).toContain('list_skills()');
       expect(instructions).toContain('Available skills: workflow-building.');
       expect(getLine(instructions, 'Available objects')).toContain(
         'company/companies, person/people',
